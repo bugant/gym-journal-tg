@@ -1,0 +1,16 @@
+# Build artifacts
+gymjournal
+test_gymjournal
+*.o
+
+# Local database
+*.db
+
+# Bot token (never commit this)
+apikey.txt
+
+# Editor / OS cruft
+*.swp
+*.swo
+*~
+.DS_Store
