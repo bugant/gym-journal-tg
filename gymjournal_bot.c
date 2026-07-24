@@ -732,7 +732,36 @@ void cron(sqlite3 *db) {
 int main(int argc, char **argv) {
     /* All option parsing (--apikey, --dbfile, --debug, --verbose) is handled
      * by botlib's startBot(); we just pass through. Triggers == NULL means
-     * every private DM reaches the callback, which is what we want. */
+     * every private DM reaches the callback, which is what we want.
+     *
+     * botlib resolves the API key as: --apikey flag, else apikey.txt. We add
+     * a third source in between, the GYMJOURNAL_API_KEY environment variable,
+     * by injecting it as a synthetic --apikey argument when it is set and the
+     * caller did not already pass --apikey explicitly. Final precedence:
+     *   --apikey flag  >  GYMJOURNAL_API_KEY env  >  apikey.txt file
+     */
+    const char *envkey = getenv("GYMJOURNAL_API_KEY");
+    int has_apikey_arg = 0;
+    for (int j = 1; j < argc; j++) {
+        if (!strcmp(argv[j], "--apikey")) { has_apikey_arg = 1; break; }
+    }
+
+    if (envkey && *envkey && !has_apikey_arg) {
+        char **newargv = malloc(sizeof(char *) * (argc + 3));
+        if (newargv == NULL) {
+            fprintf(stderr, "out of memory\n");
+            return 1;
+        }
+        memcpy(newargv, argv, sizeof(char *) * argc);
+        newargv[argc]     = (char *)"--apikey";
+        newargv[argc + 1] = (char *)envkey;
+        newargv[argc + 2] = NULL;
+        int rc = startBot((char *)GYM_SCHEMA, argc + 2, newargv,
+                          TB_FLAGS_NONE, handleRequest, cron, NULL);
+        free(newargv); /* not reached: startBot loops forever or exits */
+        return rc;
+    }
+
     return startBot((char *)GYM_SCHEMA, argc, argv, TB_FLAGS_NONE,
                     handleRequest, cron, NULL);
 }

@@ -34,10 +34,13 @@ This produces the `gymjournal` binary. Build artifacts (`gymjournal`,
 
 1. Create a bot via [@BotFather](https://t.me/BotFather) and copy the API
    token it gives you.
-2. Save it in one of these two ways:
+2. Save it in any of these three ways (in order of precedence):
+   - Pass it on the command line with `--apikey <token>`.
+   - Export the `GYMJOURNAL_API_KEY` environment variable, e.g.
+     `export GYMJOURNAL_API_KEY=123456:ABC...` (handy for systemd units,
+     containers, and shells where you want to avoid writing secrets to disk).
    - Put the token on a single line in `apikey.txt` in the bot's working
      directory. **Never commit this file** — it is git-ignored.
-   - Or pass it on the command line with `--apikey <token>`.
 
 An example token file is provided as `apikey.txt.example`.
 
