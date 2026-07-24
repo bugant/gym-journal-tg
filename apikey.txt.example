@@ -1,0 +1,7 @@
+# Put your Telegram bot API token from @BotFather on a single line below.
+# This file is an EXAMPLE. Copy it to apikey.txt and replace the placeholder.
+#
+#   cp apikey.txt.example apikey.txt
+#
+# Then edit apikey.txt. Never commit the real apikey.txt.
+1234567890:AAExAmPlETokEn-withNoRealVaLue-DoNotUse

@@ -1,0 +1,225 @@
+# Gym Journal Telegram Bot
+
+A minimal, single-user-per-chat Telegram bot for tracking gym sessions,
+written in C on top of [botlib](https://github.com/antirez/botlib).
+
+The bot is meant for **private chat only**: every DM reaches the callback,
+and all data is scoped by your Telegram user id (`br->from`). It keeps no
+in-memory state — everything lives in a local SQLite database.
+
+---
+
+## Build dependencies
+
+Only system libraries, both ubiquitous:
+
+- `libcurl`
+- `libsqlite3`
+
+Plus a C11 compiler. On Debian/Ubuntu:
+
+    sudo apt-get install build-essential libcurl4-openssl-dev libsqlite3-dev
+
+Before building the bot itself. The pure-layer test binary deliberately
+links none of these (see "Tests" below).
+
+## Building
+
+    make
+
+This produces the `gymjournal` binary. Build artifacts (`gymjournal`,
+`test_gymjournal`, `*.o`) and the local database (`*.db`) are git-ignored.
+
+## Token setup
+
+1. Create a bot via [@BotFather](https://t.me/BotFather) and copy the API
+   token it gives you.
+2. Save it in one of these two ways:
+   - Put the token on a single line in `apikey.txt` in the bot's working
+     directory. **Never commit this file** — it is git-ignored.
+   - Or pass it on the command line with `--apikey <token>`.
+
+An example token file is provided as `apikey.txt.example`.
+
+## Running
+
+    make && ./gymjournal
+
+Optional command-line flags (passed through to botlib):
+
+| Flag                    | Meaning                                                     |
+|-------------------------|-------------------------------------------------------------|
+| `--apikey <token>`      | Telegram bot API token (overrides `apikey.txt`).           |
+| `--dbfile <path>`        | SQLite database file (default `./mybot.sqlite`).           |
+| `--debug`                | Enable debug logging. Repeat for more verbosity.           |
+| `--verbose`              | Enable verbose message logging.                           |
+
+Then DM the bot from Telegram. The bot long-polls Telegram, so it needs
+outbound HTTPS to `api.telegram.org`.
+
+## Commands
+
+All commands are dispatched case-insensitively; the leading `/` is optional
+in matching but is typed in Telegram as `/help`, `/new`, etc.
+
+| Command                              | Behavior                                              |
+|--------------------------------------|-------------------------------------------------------|
+| `/help`                              | List all commands with usage examples.               |
+| `/new [YYYY-MM-DD]`                  | Start a session for today (or the given date). If a session is already open, it is closed first, then the new one starts; the reply reports both the closed (if any) and the new session id. |
+| `/add <ex> <WxR[xN]> [more ...]`     | Add sets for one exercise. Replies with a collapsed one-line confirmation. |
+| `/done`                              | Close the active session and print a summary.        |
+| `/list`                              | Last ~10 sessions: id, date, #sets, status, total volume. |
+| `/show [id]`                         | Show a session in full (default = active/last). Verifies ownership. |
+| `/stats`                             | All-time totals: #sessions, #sets, total volume, heaviest single set, top exercise by volume. |
+| unknown                              | Reply with a short hint pointing to `/help`.          |
+
+### Input grammar for `/add`
+
+One token per real sub-set, with a **repeat suffix** to keep uniform entry
+terse without ambiguity. A token is sub-set-shaped iff it matches
+`WxR`, `WxRxN`, or `xR` (case-insensitive on `x`).
+
+| Shape     | Meaning                                              | Rows |
+|-----------|------------------------------------------------------|------|
+| `WxRxN`   | weight `W`, reps `R`, repeated `N` times             | N    |
+| `WxR`     | one set at `W` kg for `R` reps                       | 1    |
+| `xR`      | one bodyweight set (weight = 0) for `R` reps         | 1    |
+
+Everything before the first sub-set-shaped token is the **exercise name**
+(allowing multi-word names such as "Bench Press"). Decimal weights are
+supported, e.g. `60.5x10`.
+
+### Examples
+
+    /add bench 60x10x3      # three sets of 60kg x 10 reps        -> 3 rows
+    /add bench 60x10 55x8 50x6   # drop set, three distinct sets  -> 3 rows
+    /add bench 60x10       # single set                          -> 1 row
+    /add bench x10         # bodyweight single set (weight = 0)  -> 1 row
+    /add Bench Press 60x10 # multi-word exercise name supported   -> 1 row
+
+The reply for `/add` is a collapsed one-line confirmation such as:
+
+    bench  60x10 + 55x8 + 50x6  [vol 1340]
+
+Uniform groups collapse further:
+
+    bench  3x10 @ 60kg  [vol 1800]
+
+All-bodyweight groups show `[bw]` instead of a volume:
+
+    pull ups  3x10  [bw]
+
+## Display formats
+
+### `/show`
+
+```
+Session #13  (10/07/2026, open)
+  bench       60x10 + 55x8 + 50x6     vol 1340
+  squat       5x5 @ 100kg              vol 2500
+  pull ups    3x10                     bw
+3 exercises, 9 sets, total vol 3840 kg*rep
+```
+
+### `/list`
+
+```
+Recent sessions:
+#12  10/07  18 sets  closed  vol 4200 kg*rep
+#13  10/07   3 sets  OPEN    vol  600 kg*rep
+```
+
+### Volume
+
+`volume = sum(weight * reps)` across all real sub-set rows. Bodyweight sets
+(weight = 0) contribute 0 to volume but still count toward set totals.
+
+## Database schema
+
+The bot prepends botlib's built-in `KeyValue` table (so the KV API still
+works) and creates:
+
+```sql
+CREATE TABLE IF NOT EXISTS users (
+    user_id   INTEGER PRIMARY KEY,
+    username  TEXT,
+    first_seen INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER,
+    started_at INTEGER,
+    closed_at  INTEGER            -- 0 = open
+);
+
+CREATE TABLE IF NOT EXISTS sets (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  INTEGER,
+    user_id     INTEGER,
+    exercise    TEXT NOT NULL,
+    weight      REAL NOT NULL,    -- kg, 0 = bodyweight
+    reps        INTEGER NOT NULL,
+    group_id    INTEGER,          -- shared by rows from one /add
+    created_at  INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_sets_session ON sets(session_id);
+CREATE INDEX IF NOT EXISTS idx_sets_group   ON sets(group_id);
+CREATE INDEX IF NOT EXISTS idx_sets_user_ex ON sets(user_id, exercise);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+```
+
+Every query is scoped by `br->from` (your Telegram user ID), so multiple
+users can share one bot instance without seeing each other's data. One
+`sets` row is inserted per **real sub-set**; a `group_id` ties all rows
+inserted by a single `/add` call together for collapsed display and
+future edit/delete.
+
+## Tests
+
+The pure-logic layer (`gymjournal.c` / `gymjournal.h`) is Telegram-agnostic
+and has a hand-rolled test runner that links **no curl, no botlib, no
+sqlite** — only `gymjournal.c`, `sds.c`, and `test_gymjournal.c`:
+
+    make test
+
+A successful run prints something like:
+
+    ran 7 test groups, 0 assertion failure(s)
+
+The runner is table-driven: each test is a `void` function registered in
+the `tests[]` array near the bottom of `test_gymjournal.c`. To add a case,
+write a `static void test_foo(void)` function that uses the `ASSERT` /
+`ASSERT_STR` macros and append an entry to `tests[]`:
+
+```c
+static void test_foo(void) {
+    ASSERT(some_pure_function(...) == 1);
+}
+
+/* ...later, in the table: */
+{ "foo", test_foo },
+```
+
+Pass `-v` to the test binary for verbose per-group output:
+
+    ./test_gymjournal -v
+
+Live Telegram testing (the botlib long-poll loop, network, a real token,
+real DMs, `handleRequest` dispatch, the schema on disk) is left to the
+user — the pure layer's correctness does not depend on it, and
+`test_gymjournal` deliberately links none of it.
+
+## Layering
+
+- **`gymjournal.c` / `gymjournal.h`** — Telegram-agnostic. Depends only on
+  `sds`. Owns sub-set token parsing, exercise-name extraction, collapsed-line
+  formatting, and volume/summary math. Covered by `test_gymjournal.c`.
+- **`gymjournal_bot.c`** — botlib integration layer. Owns the SQL schema,
+  the multi-user-scoped DB queries, the command handlers, and the botlib
+  callbacks (`handleRequest`, `cron`, `main`). Builds in-memory
+  `SubsetRow[]` / `Group[]` from DB results and delegates formatting + math
+  to the pure API.
+- **`test_gymjournal.c`** — `#include "gymjournal.h"` only. Hand-rolled
+  `ASSERT` / `ASSERT_STR` + table-driven case list + own `main`.

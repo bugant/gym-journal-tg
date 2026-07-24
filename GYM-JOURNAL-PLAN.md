@@ -152,7 +152,7 @@ Dispatch by `strcasecmp(br->argv[0] + 1, ...)` (skip the leading `/`).
 | Command                              | Behavior |
 |--------------------------------------|----------|
 | `/help`                              | List all commands + usage examples. |
-| `/new [YYYY-MM-DD]`                  | Start a session for `br->from`; error if one is already open. Default date = now. |
+| `/new [YYYY-MM-DD]`                  | Start a session for `br->from`; if a session is already open, close it first, then start the new one. The reply reports both the closed (if any) and the new session id. Default date = now. |
 | `/add <ex> <Sx...> [<Sx...>...]`     | Parse sub-set tokens, insert rows tied to the active session under one `group_id`. Replies with a collapsed one-line confirmation, e.g. `bench  60x10 + 55x8 + 50x6  (3 sets, vol 1340 kg*rep)`. |
 | `/done`                              | Close the active session; print summary: #exercises (distinct groups), #sets (rows), total volume = sum(weight*reps). |
 | `/list`                              | Last ~10 sessions: id, date (dd/mm), #sets, status (open/closed), total volume. |
