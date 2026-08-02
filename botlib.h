@@ -33,10 +33,10 @@
 #define UNUSED(V) ((void) V)
 #endif
 
-#include <sqlite3.h>
+#include <libpq-fe.h>
 
 #include "sds.h"
-#include "sqlite_wrap.h"
+#include "pg_wrap.h"
 #include "cJSON.h"
 
 #define TB_FLAGS_NONE 0
@@ -68,8 +68,8 @@ typedef struct BotRequest {
 /* Bot callback type. This must be registed when the bot is initialized.
  * Each time the bot receives a command / message matching the list of
  * trigger strings, it starts a thread and calls this callback. */
-typedef void (*TBRequestCallback)(sqlite3 *dbhandle, BotRequest *br);
-typedef void (*TBCronCallback)(sqlite3 *dbhandle);
+typedef void (*TBRequestCallback)(PGconn *dbhandle, BotRequest *br);
+typedef void (*TBCronCallback)(PGconn *dbhandle);
 
 /* Type of request used as arugment of the request callback. */
 #define TB_TYPE_UNKNOWN 0
@@ -84,12 +84,11 @@ typedef void (*TBCronCallback)(sqlite3 *dbhandle);
 #define TB_FILE_TYPE_DOCUMENT 3
 
 /* Concatenate this when starting the bot and passing your create
- * DB query for Sqlite database initialization. */
+ * DB query for PostgreSQL database initialization. */
 #define TB_CREATE_KV_STORE \
-    "CREATE TABLE IF NOT EXISTS KeyValue(expire INT, " \
-                                        "key TEXT, " \
-                                        "value BLOB);" \
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_kv_key ON KeyValue(key);" \
+    "CREATE TABLE IF NOT EXISTS KeyValue(expire BIGINT, " \
+                                        "key TEXT PRIMARY KEY, " \
+                                        "value BYTEA);" \
     "CREATE INDEX IF NOT EXISTS idx_ex_key ON KeyValue(expire);"
 
 /* Allocation. */
@@ -114,17 +113,17 @@ char *botGetUsername(void);
 void freeBotRequest(BotRequest *br);
 
 /* Database. */
-int kvSetLen(sqlite3 *dbhandle, const char *key, const char *value, size_t vlen, int64_t expire);
-int kvSet(sqlite3 *dbhandle, const char *key, const char *value, int64_t expire);
-sds kvGet(sqlite3 *dbhandle, const char *key);
-void kvDel(sqlite3 *dbhandle, const char *key);
+int kvSetLen(PGconn *dbhandle, const char *key, const char *value, size_t vlen, int64_t expire);
+int kvSet(PGconn *dbhandle, const char *key, const char *value, int64_t expire);
+sds kvGet(PGconn *dbhandle, const char *key);
+void kvDel(PGconn *dbhandle, const char *key);
 void sqlEnd(sqlRow *row);
 int sqlNextRow(sqlRow *row);
-int sqlInsert(sqlite3 *dbhandle, const char *sql, ...);
-int sqlQuery(sqlite3 *dbhandle, const char *sql, ...);
-int sqlSelect(sqlite3 *dbhandle, sqlRow *row, const char *sql, ...);
-int sqlSelectOneRow(sqlite3 *dbhandle, sqlRow *row, const char *sql, ...);
-int64_t sqlSelectInt(sqlite3 *dbhandle, const char *sql, ...);
+int sqlInsert(PGconn *dbhandle, const char *sql, ...);
+int sqlQuery(PGconn *dbhandle, const char *sql, ...);
+int sqlSelect(PGconn *dbhandle, sqlRow *row, const char *sql, ...);
+int sqlSelectOneRow(PGconn *dbhandle, sqlRow *row, const char *sql, ...);
+int64_t sqlSelectInt(PGconn *dbhandle, const char *sql, ...);
 
 /* Json */
 cJSON *cJSON_Select(cJSON *o, const char *fmt, ...);

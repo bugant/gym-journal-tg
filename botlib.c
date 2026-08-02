@@ -45,14 +45,14 @@
 #include <time.h>
 
 #include <curl/curl.h>
-#include <sqlite3.h>
+#include <libpq-fe.h>
 
 #include "sds.h"
 #include "cJSON.h"
 #include "botlib.h"
 
 /* Thread local and atomic state. */
-_Thread_local sqlite3 *DbHandle = NULL; /* Per-thread sqlite handle. */
+PGconn *DbHandle = NULL; /* Shared PostgreSQL connection. */
 
 /* The bot global state. */
 struct {
@@ -61,7 +61,7 @@ struct {
                           --debug, so that very verbose stuff are only
                           enabled with a few --debug calls. */
     int verbose;                        // If true enables verbose info.
-    char *dbfile;                       // Change with --dbfile.
+    char *dburl;                        // Change with --dburl.
     char **triggers;                    // Strings triggering processing.
     sds apikey;                         // Telegram API key for the bot.
     sds username;                       // Bot username from getMe call.
@@ -598,35 +598,30 @@ BotRequest *createBotRequest(void) {
  * Database abstraction
  * ===========================================================================*/
 
-/* Create the SQLite tables if needed (if createdb is true), and return
- * the SQLite database handle. Return NULL on error. */
-sqlite3 *dbInit(char *createdb_query) {
-    sqlite3 *db;
-    int rt = sqlite3_open(Bot.dbfile, &db);
-    if (rt != SQLITE_OK) {
-        fprintf(stderr, "Cannot open database: %s\n", sqlite3_errmsg(db));
-        sqlite3_close(db);
+/* Connect to PostgreSQL and create the tables if requested. */
+PGconn *dbInit(char *createdb_query) {
+    PGconn *db = PQconnectdb(Bot.dburl);
+    if (PQstatus(db) != CONNECTION_OK) {
+        fprintf(stderr, "Cannot open database: %s\n", PQerrorMessage(db));
+        PQfinish(db);
         return NULL;
     }
 
     if (createdb_query) {
-        char *errmsg;
-        int rc = sqlite3_exec(db, createdb_query, 0, 0, &errmsg);
-        if (rc != SQLITE_OK) {
-            fprintf(stderr, "SQL error [%d]: %s\n", rc, errmsg);
-            sqlite3_free(errmsg);
-            sqlite3_close(db);
+        PGresult *res = PQexec(db, createdb_query);
+        if (!res || PQresultStatus(res) != PGRES_COMMAND_OK) {
+            fprintf(stderr, "SQL error: %s\n", res ? PQresultErrorMessage(res) : PQerrorMessage(db));
+            if (res) PQclear(res);
+            PQfinish(db);
             return NULL;
         }
+        PQclear(res);
     }
     return db;
 }
 
-/* Should be called every time a thread exits, so that if the thread has
- * an SQLite thread-local handle, it gets closed. */
+/* The connection is shared and remains open for the lifetime of the bot. */
 void dbClose(void) {
-    if (DbHandle) sqlite3_close(DbHandle);
-    DbHandle = NULL;
 }
 
 /* =============================================================================
@@ -635,12 +630,13 @@ void dbClose(void) {
 
 /* Request handling thread entry point. */
 void *botHandleRequest(void *arg) {
-    DbHandle = dbInit(NULL);
     BotRequest *br = arg;
 
     /* Parse the request as a command composed of arguments. */
     br->argv = sdssplitargs(br->request,&br->argc);
+    pgDbLock();
     Bot.req_callback(DbHandle,br);
+    pgDbUnlock();
     freeBotRequest(br);
     dbClose();
     return NULL;
@@ -852,7 +848,11 @@ void botMain(void) {
          * errors for instance), so wait a bit at every cycle, but only
          * if we didn't made any progresses with the ID. */
         if (nextid == previd) usleep(100000);
-        if (Bot.cron_callback) Bot.cron_callback(DbHandle);
+        if (Bot.cron_callback) {
+            pgDbLock();
+            Bot.cron_callback(DbHandle);
+            pgDbUnlock();
+        }
     }
 }
 
@@ -884,7 +884,7 @@ int startBot(char *createdb_query, int argc, char **argv, int flags, TBRequestCa
 
     Bot.debug = 0;
     Bot.verbose = 0;
-    Bot.dbfile = "./mybot.sqlite";
+    Bot.dburl = "";
     Bot.triggers = triggers;
     Bot.apikey = NULL;
     Bot.req_callback = req_callback;
@@ -900,19 +900,18 @@ int startBot(char *createdb_query, int argc, char **argv, int flags, TBRequestCa
             Bot.verbose = 1;
         } else if (!strcmp(argv[j],"--apikey") && morearg) {
             Bot.apikey = sdsnew(argv[++j]);
-        } else if (!strcmp(argv[j],"--dbfile") && morearg) {
-            Bot.dbfile = argv[++j];
+        } else if (!strcmp(argv[j],"--dburl") && morearg) {
+            Bot.dburl = argv[++j];
         } else if (!(flags & TB_FLAGS_IGNORE_BAD_ARG)) {
             printf(
-            "Usage: %s [--apikey <apikey>] [--debug] [--verbose] "
-            "[--dbfile <filename>]"
+                "Usage: %s [--apikey <apikey>] [--debug] [--verbose] "
+                "[--dburl <libpq-conninfo>]"
             "\n",argv[0]);
             exit(1);
         }
     }
 
-    /* Initializations. Note that we don't redefine the SQLite allocator,
-     * since SQLite errors are always handled by Stonky anyway. */
+    /* Initializations. */
     curl_global_init(CURL_GLOBAL_DEFAULT);
     if (Bot.apikey == NULL) readApiKeyFromFile();
     if (Bot.apikey == NULL) {

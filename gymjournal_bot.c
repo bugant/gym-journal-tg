@@ -1,11 +1,11 @@
 /* gymjournal_bot.c -- Telegram bot integration layer.
  *
- * Owns the SQLite schema, the multi-user-scoped DB queries, the botlib
+ * Owns the PostgreSQL schema, the multi-user-scoped DB queries, the botlib
  * command handlers and the botlib callbacks (handleRequest, cron, main).
  * It builds in-memory SubsetRow[] / Group[] from the `sets` table and
  * delegates all formatting and math to the pure API in gymjournal.{h,c}.
  *
- * Depends on botlib (and transitively libcurl + libsqlite3). The pure
+ * Depends on botlib (and transitively libcurl + libpq). The pure
  * layer and its tests link none of this.
  */
 
@@ -30,30 +30,30 @@
 
 /* TB_CREATE_KV_STORE is prepended automatically by botlib via dbInit() when
  * we pass it as the `createdb_query`; here we chain our own tables after the
- * KV store. The whole string is fed to sqlite3_exec(), which accepts multiple
+ * KV store. The whole string is fed to PQexec(), which accepts multiple
  * statements separated by ';'. */
 #define GYM_SCHEMA \
     TB_CREATE_KV_STORE \
     "CREATE TABLE IF NOT EXISTS users (" \
-        "user_id   INTEGER PRIMARY KEY," \
+        "user_id   BIGINT PRIMARY KEY," \
         "username  TEXT," \
-        "first_seen INTEGER" \
+        "first_seen BIGINT" \
     ");" \
     "CREATE TABLE IF NOT EXISTS sessions (" \
-        "id         INTEGER PRIMARY KEY AUTOINCREMENT," \
-        "user_id    INTEGER," \
-        "started_at INTEGER," \
-        "closed_at  INTEGER" \
+        "id         BIGSERIAL PRIMARY KEY," \
+        "user_id    BIGINT," \
+        "started_at BIGINT," \
+        "closed_at  BIGINT" \
     ");" \
     "CREATE TABLE IF NOT EXISTS sets (" \
-        "id          INTEGER PRIMARY KEY AUTOINCREMENT," \
-        "session_id  INTEGER," \
-        "user_id     INTEGER," \
+        "id          BIGSERIAL PRIMARY KEY," \
+        "session_id  BIGINT," \
+        "user_id     BIGINT," \
         "exercise    TEXT NOT NULL," \
         "weight      REAL NOT NULL," \
-        "reps        INTEGER NOT NULL," \
-        "group_id    INTEGER," \
-        "created_at  INTEGER" \
+        "reps        BIGINT NOT NULL," \
+        "group_id    BIGINT," \
+        "created_at  BIGINT" \
     ");" \
     "CREATE INDEX IF NOT EXISTS idx_sets_session ON sets(session_id);" \
     "CREATE INDEX IF NOT EXISTS idx_sets_group   ON sets(group_id);" \
@@ -88,7 +88,7 @@ static sds appendReal(sds s, double v) {
 }
 
 /* Resolve the active (open) session id for a user, or 0 if none is open. */
-static int64_t getActiveSession(sqlite3 *db, int64_t user_id) {
+static int64_t getActiveSession(PGconn *db, int64_t user_id) {
     return sqlSelectInt(db,
         "SELECT id FROM sessions "
         "  WHERE user_id = ?i AND closed_at = 0 "
@@ -98,7 +98,7 @@ static int64_t getActiveSession(sqlite3 *db, int64_t user_id) {
 
 /* Most recent session id for a user (open or closed), or 0 if the user has
  * no sessions at all. Used as the default target for /show. */
-static int64_t getLatestSession(sqlite3 *db, int64_t user_id) {
+static int64_t getLatestSession(PGconn *db, int64_t user_id) {
     return sqlSelectInt(db,
         "SELECT id FROM sessions "
         "  WHERE user_id = ?i "
@@ -125,7 +125,7 @@ static int firstSubsetIdx(BotRequest *br, int start) {
  * SubsetRow array and return it via *rows_out / *n_out. Returns 1 on
  * success (even for an empty group, with n_out == 0), 0 on allocation
  * failure. Caller frees *rows_out. */
-static int loadGroupRows(sqlite3 *db, int64_t group_id,
+static int loadGroupRows(PGconn *db, int64_t group_id,
                          SubsetRow **rows_out, int *n_out) {
     *rows_out = NULL;
     *n_out = 0;
@@ -147,7 +147,7 @@ static int loadGroupRows(sqlite3 *db, int64_t group_id,
             buf = t;
             cap = newcap;
         }
-        buf[n].weight = row.col[0].type == SQLITE_FLOAT
+        buf[n].weight = row.col[0].type == SQL_FLOAT
                             ? row.col[0].d
                             : (double)row.col[0].i;
         buf[n].reps = (int)row.col[1].i;
@@ -166,9 +166,9 @@ static int loadGroupRows(sqlite3 *db, int64_t group_id,
 
 /* Forward declaration: cmdDone() reuses the default-target path of cmdShow()
  * to print the closing summary. */
-static void cmdShow(sqlite3 *db, BotRequest *br);
+static void cmdShow(PGconn *db, BotRequest *br);
 
-static void cmdHelp(sqlite3 *db, BotRequest *br) {
+static void cmdHelp(PGconn *db, BotRequest *br) {
     UNUSED(db);
     sds s =
         "Gym Journal commands (private chat only):\n"
@@ -187,7 +187,7 @@ static void cmdHelp(sqlite3 *db, BotRequest *br) {
     reply(br, s);
 }
 
-static void cmdNew(sqlite3 *db, BotRequest *br) {
+static void cmdNew(PGconn *db, BotRequest *br) {
     if (br->argc > 2) {
         reply(br, "Usage: /new [YYYY-MM-DD]");
         return;
@@ -253,7 +253,7 @@ static void cmdNew(sqlite3 *db, BotRequest *br) {
     sdsfree(s);
 }
 
-static void cmdAdd(sqlite3 *db, BotRequest *br) {
+static void cmdAdd(PGconn *db, BotRequest *br) {
     if (br->argc < 3) {
         reply(br, "Usage: /add <exercise> <WxR[xN]> [more ...]\n"
                   "Example: /add bench 60x10x3 55x8 50x6");
@@ -380,7 +380,7 @@ static void cmdAdd(sqlite3 *db, BotRequest *br) {
     sdsfree(s);
 }
 
-static void cmdDone(sqlite3 *db, BotRequest *br) {
+static void cmdDone(PGconn *db, BotRequest *br) {
     int64_t sid = getActiveSession(db, br->from);
     if (sid == 0) {
         reply(br, "No active session to close.");
@@ -397,7 +397,7 @@ static void cmdDone(sqlite3 *db, BotRequest *br) {
     cmdShow(db, br);   /* falls through to the default (now closed) session */
 }
 
-static void cmdList(sqlite3 *db, BotRequest *br) {
+static void cmdList(PGconn *db, BotRequest *br) {
     const int LIMIT = 10;
     sqlRow row;
     sqlSelect(db, &row,
@@ -419,7 +419,7 @@ static void cmdList(sqlite3 *db, BotRequest *br) {
         time_t started = (time_t)row.col[1].i;
         int64_t closed = row.col[2].i;
         int64_t nsets = row.col[3].i;
-        double vol = row.col[4].type == SQLITE_FLOAT
+        double vol = row.col[4].type == SQL_FLOAT
                          ? row.col[4].d : (double)row.col[4].i;
 
         s = sdscatprintf(s, "#%lld  ", (long long)id);
@@ -441,7 +441,7 @@ static void cmdList(sqlite3 *db, BotRequest *br) {
  * group + summary footer. `sid` is the session id, already verified as
  * owned by br->from. Returns 1 on success, 0 if the session has no sets
  * (caller prints a lighter header). */
-static int printSessionDetail(sqlite3 *db, sds s, int64_t sid, int64_t user_id) {
+static int printSessionDetail(PGconn *db, sds s, int64_t sid, int64_t user_id) {
     /* So we can pad exercise names into a tidy column, look up the longest
      * name in this session first (cheap: few rows). */
     int namepad = 6;
@@ -541,7 +541,7 @@ static int printSessionDetail(sqlite3 *db, sds s, int64_t sid, int64_t user_id) 
     return 1;
 }
 
-static void cmdShow(sqlite3 *db, BotRequest *br) {
+static void cmdShow(PGconn *db, BotRequest *br) {
     int64_t sid = 0;
 
     if (br->argc == 1) {
@@ -598,7 +598,7 @@ static void cmdShow(sqlite3 *db, BotRequest *br) {
     sdsfree(s);
 }
 
-static void cmdStats(sqlite3 *db, BotRequest *br) {
+static void cmdStats(PGconn *db, BotRequest *br) {
     int64_t nsessions = sqlSelectInt(db,
         "SELECT COUNT(*) FROM sessions WHERE user_id = ?i", br->from);
     int64_t nsets = sqlSelectInt(db,
@@ -609,8 +609,8 @@ static void cmdStats(sqlite3 *db, BotRequest *br) {
         sqlSelectOneRow(db, &r,
             "SELECT COALESCE(SUM(weight*reps),0) FROM sets WHERE user_id = ?i",
             br->from);
-        if (r.col && (r.col[0].type == SQLITE_FLOAT || r.col[0].type == SQLITE_INTEGER))
-            totalvol = r.col[0].type == SQLITE_FLOAT ? r.col[0].d : (double)r.col[0].i;
+        if (r.col && (r.col[0].type == SQL_FLOAT || r.col[0].type == SQL_INTEGER))
+            totalvol = r.col[0].type == SQL_FLOAT ? r.col[0].d : (double)r.col[0].i;
         sqlEnd(&r);
     }
 
@@ -629,8 +629,8 @@ static void cmdStats(sqlite3 *db, BotRequest *br) {
             "  WHERE user_id = ?i AND weight > 0 "
             "  ORDER BY weight DESC LIMIT 1",
             br->from);
-        if (r.col && r.col[0].type != SQLITE_NULL) {
-            double w = r.col[0].type == SQLITE_FLOAT ? r.col[0].d
+        if (r.col && r.col[0].type != SQL_NULL) {
+            double w = r.col[0].type == SQL_FLOAT ? r.col[0].d
                                                      : (double)r.col[0].i;
             const char *ex = r.col[1].s ? r.col[1].s : "?";
             s = sdscat(s, "  heaviest: ");
@@ -650,9 +650,9 @@ static void cmdStats(sqlite3 *db, BotRequest *br) {
             "  WHERE user_id = ?i "
             "  GROUP BY exercise ORDER BY vol DESC LIMIT 1",
             br->from);
-        if (r.col && r.col[0].type != SQLITE_NULL) {
+        if (r.col && r.col[0].type != SQL_NULL) {
             const char *ex = r.col[0].s ? r.col[0].s : "?";
-            double vol = r.col[1].type == SQLITE_FLOAT ? r.col[1].d
+            double vol = r.col[1].type == SQL_FLOAT ? r.col[1].d
                                                        : (double)r.col[1].i;
             s = sdscat(s, "  top lift: ");
             s = sdscat(s, ex);
@@ -675,10 +675,10 @@ static void cmdStats(sqlite3 *db, BotRequest *br) {
 
 /* Per-request entry point. Upserts the user row, then dispatches the
  * command. The request object is freed by botlib after we return. */
-void handleRequest(sqlite3 *db, BotRequest *br) {
+void handleRequest(PGconn *db, BotRequest *br) {
     /* Upsert user row, tracking username changes. */
-    sqlQuery(db, "INSERT OR IGNORE INTO users (user_id, username, first_seen) "
-                 "VALUES (?i, ?s, ?i)",
+    sqlQuery(db, "INSERT INTO users (user_id, username, first_seen) "
+                 "VALUES (?i, ?s, ?i) ON CONFLICT (user_id) DO NOTHING",
              br->from,
              br->from_username ? br->from_username : "",
              (int64_t)time(NULL));
@@ -721,7 +721,7 @@ void handleRequest(sqlite3 *db, BotRequest *br) {
 
 /* Cron hook. Currently nothing to do periodically; kept for future use
  * (e.g. session timeouts). */
-void cron(sqlite3 *db) {
+void cron(PGconn *db) {
     UNUSED(db);
 }
 
@@ -730,7 +730,7 @@ void cron(sqlite3 *db) {
  * ========================================================================== */
 
 int main(int argc, char **argv) {
-    /* All option parsing (--apikey, --dbfile, --debug, --verbose) is handled
+    /* All option parsing (--apikey, --dburl, --debug, --verbose) is handled
      * by botlib's startBot(); we just pass through. Triggers == NULL means
      * every private DM reaches the callback, which is what we want.
      *

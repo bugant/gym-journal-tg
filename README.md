@@ -5,7 +5,7 @@ written in C on top of [botlib](https://github.com/antirez/botlib).
 
 The bot is meant for **private chat only**: every DM reaches the callback,
 and all data is scoped by your Telegram user id (`br->from`). It keeps no
-in-memory state — everything lives in a local SQLite database.
+in-memory state — everything lives in a PostgreSQL database.
 
 ---
 
@@ -14,11 +14,11 @@ in-memory state — everything lives in a local SQLite database.
 Only system libraries, both ubiquitous:
 
 - `libcurl`
-- `libsqlite3`
+- `libpq`
 
 Plus a C11 compiler. On Debian/Ubuntu:
 
-    sudo apt-get install build-essential libcurl4-openssl-dev libsqlite3-dev
+    sudo apt-get install build-essential libcurl4-openssl-dev libpq-dev
 
 Before building the bot itself. The pure-layer test binary deliberately
 links none of these (see "Tests" below).
@@ -53,7 +53,7 @@ Optional command-line flags (passed through to botlib):
 | Flag                    | Meaning                                                     |
 |-------------------------|-------------------------------------------------------------|
 | `--apikey <token>`      | Telegram bot API token (overrides `apikey.txt`).           |
-| `--dbfile <path>`        | SQLite database file (default `./mybot.sqlite`).           |
+| `--dburl <conninfo>`     | PostgreSQL libpq connection string (default uses `PG*` environment variables). |
 | `--debug`                | Enable debug logging. Repeat for more verbosity.           |
 | `--verbose`              | Enable verbose message logging.                           |
 
@@ -144,27 +144,27 @@ works) and creates:
 
 ```sql
 CREATE TABLE IF NOT EXISTS users (
-    user_id   INTEGER PRIMARY KEY,
+    user_id   BIGINT PRIMARY KEY,
     username  TEXT,
-    first_seen INTEGER
+    first_seen BIGINT
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id    INTEGER,
-    started_at INTEGER,
-    closed_at  INTEGER            -- 0 = open
+    id         BIGSERIAL PRIMARY KEY,
+    user_id    BIGINT,
+    started_at BIGINT,
+    closed_at  BIGINT             -- 0 = open
 );
 
 CREATE TABLE IF NOT EXISTS sets (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id  INTEGER,
-    user_id     INTEGER,
+    id          BIGSERIAL PRIMARY KEY,
+    session_id  BIGINT,
+    user_id     BIGINT,
     exercise    TEXT NOT NULL,
     weight      REAL NOT NULL,    -- kg, 0 = bodyweight
-    reps        INTEGER NOT NULL,
-    group_id    INTEGER,          -- shared by rows from one /add
-    created_at  INTEGER
+    reps        BIGINT NOT NULL,
+    group_id    BIGINT,           -- shared by rows from one /add
+    created_at  BIGINT
 );
 
 CREATE INDEX IF NOT EXISTS idx_sets_session ON sets(session_id);
@@ -183,7 +183,7 @@ future edit/delete.
 
 The pure-logic layer (`gymjournal.c` / `gymjournal.h`) is Telegram-agnostic
 and has a hand-rolled test runner that links **no curl, no botlib, no
-sqlite** — only `gymjournal.c`, `sds.c`, and `test_gymjournal.c`:
+PostgreSQL** — only `gymjournal.c`, `sds.c`, and `test_gymjournal.c`:
 
     make test
 
