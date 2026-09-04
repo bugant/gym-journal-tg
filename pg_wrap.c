@@ -78,7 +78,9 @@ error:
 
 static int fillRow(sqlRow *row, PGresult *res, int current) {
     row->res = res;
-    row->current = current;
+    /* Note: do NOT store `current` into row->current here. sqlNextRow()
+     * increments row->current before calling us; resetting it here would
+     * make multi-row iterations loop forever on the first row. */
     row->cols = PQnfields(res);
     row->col = xmalloc((size_t)row->cols * sizeof(*row->col));
     row->owned = calloc((size_t)row->cols, sizeof(*row->owned));
@@ -118,10 +120,15 @@ int sqlGenericQuery(PGconn *dbhandle, sqlRow *row, const char *sql, va_list ap) 
     sdsfree(query);
     if (!res) return SQL_ERROR;
     ExecStatusType status = PQresultStatus(res);
-    if (status == PGRES_TUPLES_OK && PQntuples(res) > 0 && row) {
-        row->res = res;
-        row->current = 0;
-        return SQL_ROW;
+    if (status == PGRES_TUPLES_OK) {
+        if (row && PQntuples(res) > 0) {
+            row->res = res;
+            row->current = 0;
+            return SQL_ROW;
+        }
+        /* A SELECT that matches no rows is successful, not a PostgreSQL error. */
+        PQclear(res);
+        return SQL_DONE;
     }
     if (status == PGRES_COMMAND_OK) { PQclear(res); return SQL_DONE; }
     fprintf(stderr, "PostgreSQL query error: %s\n", PQresultErrorMessage(res));
@@ -149,7 +156,8 @@ int sqlNextRow(sqlRow *row) {
             if (row->owned[j]) PQfreemem(row->owned[j]);
         free(row->owned); xfree(row->col); row->col = NULL; row->owned = NULL;
     }
-    fillRow(row, row->res, row->current++);
+    int current = row->current++;
+    fillRow(row, row->res, current);
     return 1;
 }
 
@@ -158,7 +166,10 @@ int sqlInsert(PGconn *db, const char *sql, ...) {
     va_list ap; va_start(ap, sql);
     sqlRow row; int rc = sqlGenericQuery(db, &row, statement, ap);
     va_end(ap); sdsfree(statement);
-    if (rc != SQL_ROW || !row.col || row.col[0].type != SQL_INTEGER) { sqlEnd(&row); return 0; }
+    if (rc != SQL_ROW || !sqlNextRow(&row) || !row.col || row.col[0].type != SQL_INTEGER) {
+        sqlEnd(&row);
+        return 0;
+    }
     int64_t id = row.col[0].i; sqlEnd(&row); return id;
 }
 
@@ -175,7 +186,10 @@ int sqlSelectOneRow(PGconn *db, sqlRow *row, const char *sql, ...) {
 }
 int64_t sqlSelectInt(PGconn *db, const char *sql, ...) {
     sqlRow row; va_list ap; va_start(ap, sql); int rc = sqlGenericQuery(db, &row, sql, ap); va_end(ap);
-    int64_t result = 0; if (rc == SQL_ROW && row.col) result = row.col[0].i; sqlEnd(&row); return result;
+    int64_t result = 0;
+    if (rc == SQL_ROW && sqlNextRow(&row) && row.col) result = row.col[0].i;
+    sqlEnd(&row);
+    return result;
 }
 
 int kvSetLen(PGconn *db, const char *key, const char *value, size_t vlen, int64_t expire) {

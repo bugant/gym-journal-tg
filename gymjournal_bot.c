@@ -439,16 +439,15 @@ static void cmdList(PGconn *db, BotRequest *br) {
 
 /* Print the full detail of a session: header + one collapsed line per
  * group + summary footer. `sid` is the session id, already verified as
- * owned by br->from. Returns 1 on success, 0 if the session has no sets
- * (caller prints a lighter header). */
-static int printSessionDetail(PGconn *db, sds s, int64_t sid, int64_t user_id) {
+ * owned by br->from. Return the possibly reallocated reply buffer. */
+static sds printSessionDetail(PGconn *db, sds s, int64_t sid, int64_t user_id) {
     /* So we can pad exercise names into a tidy column, look up the longest
      * name in this session first (cheap: few rows). */
     int namepad = 6;
     {
         sqlRow r;
         sqlSelect(db, &r,
-            "SELECT exercise FROM sets "
+            "SELECT MIN(exercise) FROM sets "
             "  WHERE session_id = ?i AND user_id = ?i "
             "  GROUP BY group_id ORDER BY MIN(id) ASC",
             sid, user_id);
@@ -463,9 +462,9 @@ static int printSessionDetail(PGconn *db, sds s, int64_t sid, int64_t user_id) {
      * load its rows, format them with collapseGroup(), and add the volume
      * via groupVolume(); the Group[] array is built in parallel so we can
      * call summarizeSession() for the footer. */
-    sqlRow row;
-    sqlSelect(db, &row,
-        "SELECT group_id, exercise FROM sets "
+        sqlRow row;
+        sqlSelect(db, &row,
+        "SELECT group_id, MIN(exercise) FROM sets "
         "  WHERE session_id = ?i AND user_id = ?i "
         "  GROUP BY group_id ORDER BY MIN(id) ASC",
         sid, user_id);
@@ -487,7 +486,7 @@ static int printSessionDetail(PGconn *db, sds s, int64_t sid, int64_t user_id) {
             free(growns); free(gns); free(groups);
             sdsclear(s);
             s = sdscat(s, "Could not load session.");
-            return 0;
+            return s;
         }
 
         if (ng == gcap) {
@@ -505,7 +504,7 @@ static int printSessionDetail(PGconn *db, sds s, int64_t sid, int64_t user_id) {
                 free(growns); free(gns); free(groups);
                 sdsclear(s);
                 s = sdscat(s, "Out of memory.");
-                return 0;
+                return s;
             }
             groups = tg; growns = tr; gns = tn; gcap = newcap;
         }
@@ -538,7 +537,7 @@ static int printSessionDetail(PGconn *db, sds s, int64_t sid, int64_t user_id) {
 
     for (int i = 0; i < ng; i++) free(growns[i]);
     free(growns); free(gns); free(groups);
-    return 1;
+    return s;
 }
 
 static void cmdShow(PGconn *db, BotRequest *br) {
@@ -593,7 +592,7 @@ static void cmdShow(PGconn *db, BotRequest *br) {
     s = sdscat(s, closed ? ", closed)" : ", open)");
     s = sdscat(s, "\n");
 
-    printSessionDetail(db, s, sid, br->from);
+    s = printSessionDetail(db, s, sid, br->from);
     reply(br, s);
     sdsfree(s);
 }
