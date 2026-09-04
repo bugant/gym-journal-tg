@@ -57,6 +57,13 @@ Optional command-line flags (passed through to botlib):
 | `--debug`                | Enable debug logging. Repeat for more verbosity.           |
 | `--verbose`              | Enable verbose message logging.                           |
 
+Environment variables:
+
+| Variable          | Meaning                                                           |
+|-------------------|-------------------------------------------------------------------|
+| `GYMJOURNAL_API_KEY` | Bot API token, injected between `--apikey` and `apikey.txt` (see "Token setup"). |
+| `TELEGRAM_API_URL`   | Base URL of the Telegram Bot API (default `https://api.telegram.org`). Point this at a local mock server for end-to-end tests. |
+
 Then DM the bot from Telegram. The bot long-polls Telegram, so it needs
 outbound HTTPS to `api.telegram.org`.
 

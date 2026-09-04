@@ -64,6 +64,7 @@ struct {
     char *dburl;                        // Change with --dburl.
     char **triggers;                    // Strings triggering processing.
     sds apikey;                         // Telegram API key for the bot.
+    sds tgurl;                          // Telegram API base URL (env override).
     sds username;                       // Bot username from getMe call.
     TBRequestCallback req_callback;     // Callback handling requests.
     TBCronCallback cron_callback;
@@ -323,7 +324,8 @@ sds makeHTTPGETCallOpt(const char *url, int *resptr, char **optlist, int optnum)
  * makeHTTPGETCall(). */
 sds makeGETBotRequest(const char *action, int *resptr, char **optlist, int numopt)
 {
-    sds url = sdsnew("https://api.telegram.org/bot");
+    sds url = sdsnew(Bot.tgurl ? Bot.tgurl : "https://api.telegram.org");
+    url = sdscatlen(url,"/bot",4);
     url = sdscat(url,Bot.apikey);
     url = sdscatlen(url,"/",1);
     url = sdscat(url,action);
@@ -358,7 +360,8 @@ int botSendImage(int64_t target, char *filename) {
     if (curl) {
         char url[1024];
         snprintf(url, sizeof(url),
-            "https://api.telegram.org/bot%s/sendPhoto", Bot.apikey);
+            "%s/bot%s/sendPhoto",
+            Bot.tgurl ? Bot.tgurl : "https://api.telegram.org", Bot.apikey);
         curl_easy_setopt(curl, CURLOPT_URL, url);
         curl_easy_setopt(curl, CURLOPT_HTTPPOST, formpost);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, makeHTTPGETCallWriterSDS);
@@ -538,7 +541,8 @@ int botGetFile(BotRequest *br, const char *target_filename) {
 
     char url[1024];
     snprintf(url, sizeof(url),
-        "https://api.telegram.org/file/bot%s/%s", Bot.apikey, file_path);
+        "%s/file/bot%s/%s",
+        Bot.tgurl ? Bot.tgurl : "https://api.telegram.org", Bot.apikey, file_path);
     cJSON_Delete(json);
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, makeHTTPGETCallWriterFILE);
@@ -887,6 +891,7 @@ int startBot(char *createdb_query, int argc, char **argv, int flags, TBRequestCa
     Bot.dburl = "";
     Bot.triggers = triggers;
     Bot.apikey = NULL;
+    Bot.tgurl = NULL;
     Bot.req_callback = req_callback;
     Bot.cron_callback = cron_callback;
 
@@ -918,6 +923,19 @@ int startBot(char *createdb_query, int argc, char **argv, int flags, TBRequestCa
         printf("Provide a bot API key via --apikey or storing a file named "
                "apikey.txt in the bot working directory.\n");
         exit(1);
+    }
+    /* Optional override of the Telegram API base URL (e.g. a local mock
+     * server for end-to-end tests). Defaults to the real endpoint. */
+    {
+        const char *tgurl = getenv("TELEGRAM_API_URL");
+        if (tgurl && *tgurl) {
+            Bot.tgurl = sdsnew(tgurl);
+            size_t len = sdslen(Bot.tgurl);
+            while (len > 0 && Bot.tgurl[len-1] == '/') {
+                Bot.tgurl[--len] = '\0';
+                sdsupdatelen(Bot.tgurl);
+            }
+        }
     }
     resetBotStats();
     DbHandle = dbInit(createdb_query);
