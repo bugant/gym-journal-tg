@@ -337,63 +337,58 @@ sds makeGETBotRequest(const char *action, int *resptr, char **optlist, int numop
 /* Send an image using the sendPhoto endpoint. Return 1 on success, 0
  * on error. */
 int botSendImage(int64_t target, char *filename) {
-    CURL *curl;
-    CURLcode res;
-    int retval = 0;
-    struct curl_httppost *formpost = NULL;
-    struct curl_httppost *lastptr = NULL;
+    CURL *curl = curl_easy_init();
+    if (!curl) return 0;
 
-    /* Build the POST form to submit. */
+    curl_mime *mime = curl_mime_init(curl);
+    if (!mime) { curl_easy_cleanup(curl); return 0; }
+
+    /* chat_id string field. */
     sds strtarget = sdsfromlonglong(target);
-    curl_formadd(&formpost, &lastptr,
-             CURLFORM_COPYNAME, "chat_id",
-             CURLFORM_COPYCONTENTS, strtarget,
-             CURLFORM_END);
+    curl_mimepart *part = curl_mime_addpart(mime);
+    curl_mime_name(part, "chat_id");
+    curl_mime_data(part, strtarget, CURL_ZERO_TERMINATED);
     sdsfree(strtarget);
 
-    curl_formadd(&formpost, &lastptr,
-                 CURLFORM_COPYNAME, "photo",
-                 CURLFORM_FILE, filename,
-                 CURLFORM_END);
+    /* photo file field. */
+    part = curl_mime_addpart(mime);
+    curl_mime_name(part, "photo");
+    curl_mime_filedata(part, filename);
 
-    curl = curl_easy_init();
-    if (curl) {
-        char url[1024];
-        snprintf(url, sizeof(url),
-            "%s/bot%s/sendPhoto",
-            Bot.tgurl ? Bot.tgurl : "https://api.telegram.org", Bot.apikey);
-        curl_easy_setopt(curl, CURLOPT_URL, url);
-        curl_easy_setopt(curl, CURLOPT_HTTPPOST, formpost);
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, makeHTTPGETCallWriterSDS);
-        sds body = sdsempty(); // Accumulate the reply here.
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 1L);
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15);
-        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15);
+    int retval = 0;
+    char url[1024];
+    snprintf(url, sizeof(url),
+        "%s/bot%s/sendPhoto",
+        Bot.tgurl ? Bot.tgurl : "https://api.telegram.org", Bot.apikey);
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_MIMEPOST, mime);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, makeHTTPGETCallWriterSDS);
+    sds body = sdsempty(); // Accumulate the reply here.
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 1L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15);
 
-        /* Perform the request, res will get the return code */
-        res = curl_easy_perform(curl);
+    /* Perform the request, res will get the return code. */
+    CURLcode res = curl_easy_perform(curl);
 
-        /* Check for errors */
-        if (res == CURLE_OK) {
-            retval = 1;
-            /* Return 0 if the request worked but returned a 500 code. */
-            long code;
-            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
-            if (code == 500 || code == 400) retval = 0;
-        } else {
-            retval = 0;
-        }
-
-        if (retval == 0)
-            printf("sendImage() error from Telegram API: %s\n", body);
-        sdsfree(body);
-
-        /* always cleanup */
-        curl_easy_cleanup(curl);
+    /* Check for errors. */
+    if (res == CURLE_OK) {
+        retval = 1;
+        /* Return 0 if the request worked but returned a 500 code. */
+        long code;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
+        if (code == 500 || code == 400) retval = 0;
     }
-    curl_formfree(formpost);
+
+    if (retval == 0)
+        printf("sendImage() error from Telegram API: %s\n", body);
+    sdsfree(body);
+
+    /* always cleanup */
+    curl_mime_free(mime);
+    curl_easy_cleanup(curl);
     return retval;
 }
 
