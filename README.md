@@ -62,7 +62,7 @@ Environment variables:
 | Variable          | Meaning                                                           |
 |-------------------|-------------------------------------------------------------------|
 | `GYMJOURNAL_API_KEY` | Bot API token, injected between `--apikey` and `apikey.txt` (see "Token setup"). |
-| `TELEGRAM_API_URL`   | Base URL of the Telegram Bot API (default `https://api.telegram.org`). Point this at a local mock server for end-to-end tests. |
+| `TELEGRAM_API_URL`   | Base URL of the Telegram Bot API (default `https://api.telegram.org`). Point this at a local mock server for end-to-end tests — see below. |
 
 Then DM the bot from Telegram. The bot long-polls Telegram, so it needs
 outbound HTTPS to `api.telegram.org`.
@@ -220,6 +220,69 @@ Live Telegram testing (the botlib long-poll loop, network, a real token,
 real DMs, `handleRequest` dispatch, the schema on disk) is left to the
 user — the pure layer's correctness does not depend on it, and
 `test_gymjournal` deliberately links none of it.
+
+## End-to-end tests
+
+`make e2e` runs the **real bot binary** against a local mock Telegram Bot
+API server and a scratch PostgreSQL cluster, asserting on the bot's replies
+*and* on the rows it writes:
+
+    make e2e
+
+A successful run prints something like:
+
+    ran 33 scenarios, 33 passed, 0 failed
+
+### How it works
+
+```
+make e2e  ── run_e2e.py ─────────────────────────────────────────────
+               │ spawns / orchestrates / asserts
+               ├─ postgres  (scratch cluster: initdb + pg_ctl, high port)
+               ├─ mock_tg   (local "Telegram", plain HTTP on 127.0.0.1)
+               └─ ./gymjournal
+                    TELEGRAM_API_URL=http://127.0.0.1:<mockport> \
+                    --apikey 123456:TESTTOKEN --dburl host=...dbname=gjtest
+```
+
+- **`tests/e2e/mock_tg.py`** — a stdlib-only fake Telegram Bot API server.
+  It answers `getMe`, `getUpdates`, `sendMessage` (and `editMessageText`,
+  `sendPhoto`, `getFile` for completeness), keeps an outbox of user messages
+  the driver enqueues and an inbox of everything the bot "sends".
+- **`tests/e2e/pg_setup.py`** — provisions an isolated PostgreSQL cluster in
+  a temp dir (requires `initdb`, `pg_ctl`, `createdb`, `psql` on PATH; no
+  root, no touching your system cluster).
+- **`tests/e2e/scenarios.py`** — the data-driven scenarios. Each step sends
+  one user message, waits for the bot's single reply and checks it (exact,
+  regex, or substring), then runs optional SQL assertions against the
+  database. Every scenario starts from a freshly truncated database, so
+  session/set ids are deterministic.
+- **`tests/e2e/run_e2e.py`** — the driver: boots postgres, boots the mock,
+  spawns the bot with `TELEGRAM_API_URL` pointing at the mock, waits for the
+  bot's `getMe` to come up, then replays the scenarios.
+
+### Running subsets
+
+    make e2e-verbose                        # per-step reply output
+    make e2e-filter FILTER=add              # only scenarios matching "add"
+    python3 tests/e2e/run_e2e.py --list-scenarios
+
+### Adding a scenario
+
+Add a `Scenario(name, steps)` to `scenarios.py` and append it to the
+`SCENARIOS` list. Each `Step(send, expect=..., contains=..., db=[(sql, rows)])`
+sends `send` to the bot and, after the reply arrives, checks the expected
+text and runs the `db` SQL assertions (rows as lists of tab-separated
+strings). The bot answers every private message with exactly one
+`sendMessage`, and the driver drives one message at a time, so ordering is
+deterministic.
+
+### Requirements
+
+- A system PostgreSQL server (`postgresql-server` on Fedora) with the client
+  tools on `PATH`.
+- `python3` (stdlib only).
+- The bot built with `make`.
 
 ## Layering
 
