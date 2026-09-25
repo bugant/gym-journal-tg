@@ -53,7 +53,7 @@ Optional command-line flags (passed through to botlib):
 | Flag                    | Meaning                                                     |
 |-------------------------|-------------------------------------------------------------|
 | `--apikey <token>`      | Telegram bot API token (overrides `apikey.txt`).           |
-| `--dburl <conninfo>`     | PostgreSQL libpq connection string (default uses `PG*` environment variables). |
+| `--dburl <conninfo>`     | PostgreSQL libpq connection string (overrides `DATABASE_URL` and `PG*`). |
 | `--debug`                | Enable debug logging. Repeat for more verbosity.           |
 | `--verbose`              | Enable verbose message logging.                           |
 
@@ -62,6 +62,7 @@ Environment variables:
 | Variable          | Meaning                                                           |
 |-------------------|-------------------------------------------------------------------|
 | `GYMJOURNAL_API_KEY` | Bot API token, injected between `--apikey` and `apikey.txt` (see "Token setup"). |
+| `DATABASE_URL`       | PostgreSQL connection URI used when `--dburl` is not given (e.g. injected by the Aiven Runtime service integration). Falls back to the libpq `PG*` variables when unset. |
 | `TELEGRAM_API_URL`   | Base URL of the Telegram Bot API (default `https://api.telegram.org`). Point this at a local mock server for end-to-end tests — see below. |
 
 Then DM the bot from Telegram. The bot long-polls Telegram, so it needs

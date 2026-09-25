@@ -61,7 +61,7 @@ struct {
                           --debug, so that very verbose stuff are only
                           enabled with a few --debug calls. */
     int verbose;                        // If true enables verbose info.
-    char *dburl;                        // Change with --dburl.
+    char *dburl;                        // Set with --dburl or DATABASE_URL.
     char **triggers;                    // Strings triggering processing.
     sds apikey;                         // Telegram API key for the bot.
     sds tgurl;                          // Telegram API base URL (env override).
@@ -932,6 +932,14 @@ int startBot(char *createdb_query, int argc, char **argv, int flags, TBRequestCa
                 sdsupdatelen(Bot.tgurl);
             }
         }
+    }
+    /* Fall back to the DATABASE_URL environment variable when no --dburl
+     * was given. Container runtimes (e.g. Aiven Runtime service
+     * integrations) provide the PostgreSQL URI this way. Precedence:
+     * --dburl flag > DATABASE_URL env > libpq PG* environment variables. */
+    if (Bot.dburl == NULL || Bot.dburl[0] == '\0') {
+        const char *envurl = getenv("DATABASE_URL");
+        if (envurl && *envurl) Bot.dburl = (char *)envurl;
     }
     resetBotStats();
     DbHandle = dbInit(createdb_query);
