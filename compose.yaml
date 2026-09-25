@@ -8,9 +8,11 @@ services:
     environment:
       # Aiven Runtime detects this reference and replaces the value with the
       # real Aiven for PostgreSQL connection URI (DATABASE_URL), which the bot
-      # reads via libpq. The Telegram token is supplied as a Runtime secret
-      # (GYMJOURNAL_API_KEY), never committed here.
+      # reads via libpq.
       - DATABASE_URL=postgresql://bot:bot@postgres-db:5432/gymjournal
+      # Declared so Aiven Runtime passes it to the container; set the real
+      # token as a Runtime secret with this key, never committed here.
+      - GYMJOURNAL_API_KEY=${GYMJOURNAL_API_KEY}
 
   postgres-db:
     image: postgres:16

@@ -752,6 +752,12 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[j], "--apikey")) { has_apikey_arg = 1; break; }
     }
 
+    /* Report which optional env vars reached the process (presence only,
+     * never the values) so deployment problems are easy to diagnose. */
+    fprintf(stderr, "startup env: GYMJOURNAL_API_KEY=%s DATABASE_URL=%s\n",
+            (envkey && *envkey) ? "set" : "unset",
+            (getenv("DATABASE_URL") && *getenv("DATABASE_URL")) ? "set" : "unset");
+
     if (envkey && *envkey && !has_apikey_arg) {
         char **newargv = malloc(sizeof(char *) * (argc + 3));
         if (newargv == NULL) {
