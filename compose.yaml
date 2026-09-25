@@ -1,0 +1,20 @@
+services:
+  gymjournal-bot:
+    build:
+      context: .
+      dockerfile: Containerfile
+    depends_on:
+      - postgres-db
+    environment:
+      # Aiven Runtime detects this reference and replaces the value with the
+      # real Aiven for PostgreSQL connection URI (DATABASE_URL), which the bot
+      # reads via libpq. The Telegram token is supplied as a Runtime secret
+      # (GYMJOURNAL_API_KEY), never committed here.
+      - DATABASE_URL=postgresql://bot:bot@postgres-db:5432/gymjournal
+
+  postgres-db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: gymjournal
+      POSTGRES_USER: bot
+      POSTGRES_PASSWORD: bot

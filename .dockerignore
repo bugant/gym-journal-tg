@@ -1,0 +1,23 @@
+# Build artifacts (rebuilt inside the image)
+gymjournal
+test_gymjournal
+*.o
+
+# Local database
+*.db
+*.sqlite
+
+# Bot token (never bake into the image)
+apikey.txt
+
+# Tooling / VCS / tests / editor cruft
+.opencode.toml
+.git
+.gitignore
+tests
+__pycache__
+*.pyc
+*.swp
+*.swo
+*~
+.DS_Store
