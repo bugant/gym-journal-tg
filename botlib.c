@@ -417,21 +417,23 @@ char *botGetUsername(void) {
  * Return 1 on success, 0 on error. */
 int botSendMessageAndGetInfo(int64_t target, sds text, int64_t reply_to, int64_t *chat_id, int64_t *message_id) {
     char *options[10];
-    int optlen = 4;
+    int optlen = 2;
     options[0] = "chat_id";
     options[1] = sdsfromlonglong(target);
     options[2] = "text";
     options[3] = text;
-    options[4] = "parse_mode";
-    options[5] = "Markdown";
-    options[6] = "disable_web_page_preview";
-    options[7] = "true";
+    /* Note: no parse_mode on purpose. The bot replies are plain text; the
+     * legacy Telegram "Markdown" parser rejects unbalanced special
+     * characters (e.g. the '*' in "kg*rep" or the brackets in "[vol 1920]")
+     * with a 400, silently dropping the reply. */
+    options[4] = "disable_web_page_preview";
+    options[5] = "true";
     if (reply_to) {
         optlen++;
-        options[8] = "reply_to_message_id";
-        options[9] = sdsfromlonglong(reply_to);
+        options[6] = "reply_to_message_id";
+        options[7] = sdsfromlonglong(reply_to);
     } else {
-        options[9] = NULL; /* So we can sdsfree it later without problems. */
+        options[7] = NULL; /* So we can sdsfree it later without problems. */
     }
 
     int res;
@@ -448,7 +450,7 @@ int botSendMessageAndGetInfo(int64_t target, sds text, int64_t reply_to, int64_t
 
     sdsfree(body);
     sdsfree(options[1]);
-    sdsfree(options[9]);
+    sdsfree(options[7]);
     return res;
 }
 
@@ -465,17 +467,16 @@ int botSendMessage(int64_t target, sds text, int64_t reply_to) {
  * Return 1 on success, 0 on error. */
 int botEditMessageText(int64_t chat_id, int message_id, sds text) {
     char *options[10];
-    int optlen = 5;
+    int optlen = 3;
     options[0] = "chat_id";
     options[1] = sdsfromlonglong(chat_id);
     options[2] = "message_id";
     options[3] = sdsfromlonglong(message_id);
     options[4] = "text";
     options[5] = text;
-    options[6] = "parse_mode";
-    options[7] = "Markdown";
-    options[8] = "disable_web_page_preview";
-    options[9] = "true";
+    /* No parse_mode: replies are plain text (see botSendMessageAndGetInfo). */
+    options[6] = "disable_web_page_preview";
+    options[7] = "true";
 
     int res;
     sds body = makeGETBotRequest("editMessageText",&res,options,optlen);

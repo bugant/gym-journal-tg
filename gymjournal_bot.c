@@ -107,9 +107,16 @@ static int64_t getLatestSession(PGconn *db, int64_t user_id) {
 }
 
 /* Send a short reply to the chat the request came from. Convenience wrapper
- * around the botlib send API so command handlers read naturally. */
+ * around the botlib send API so command handlers read naturally. A failed
+ * send (e.g. Telegram rejecting the message) is logged, never silently
+ * dropped. */
 static void reply(BotRequest *br, sds text) {
-    botSendMessage(br->target, text, br->msg_id);
+    if (!botSendMessage(br->target, text, br->msg_id)) {
+        fprintf(stderr, "ERROR: failed to send reply to chat %lld "
+                        "(msg %lld): %.*s\n",
+                (long long)br->target, (long long)br->msg_id,
+                (int)sdslen(text), text);
+    }
 }
 
 /* Find the index in argv[start..argc) of the first sub-set-shaped token.

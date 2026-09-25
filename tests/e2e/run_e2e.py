@@ -120,6 +120,14 @@ def run_scenario(scenario, mock, pg, reporter):
                            "  actual:   %r") % (
                 step.send, describe_expect(step), actual)
 
+        # Replies must be sent as plain text: parse_mode=Markdown would make
+        # Telegram reject replies containing unbalanced special characters
+        # ("kg*rep", "[vol 1920]", ...) and the user would see no reply.
+        pm = sent_for_chat()[expected - 1].get("parse_mode", "")
+        if pm == "Markdown":
+            return False, ("reply for %r was sent with parse_mode=Markdown; "
+                           "Telegram may reject it (use plain text)" % step.send)
+
         for sql, expected_rows in step.db:
             rows = pg.psql(sql)
             if rows != expected_rows:
